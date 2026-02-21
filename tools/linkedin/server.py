@@ -306,5 +306,186 @@ def linkedin_search_people(query: str, limit: int = 10) -> str:
         return json.dumps({"error": str(e)})
 
 
+@mcp.tool()
+def linkedin_search_posts(query: str, limit: int = 10) -> str:
+    """Search LinkedIn posts by keyword or hashtag.
+
+    NOTE: Uses unofficial Voyager API. Requires LINKEDIN_EMAIL + LINKEDIN_PASSWORD.
+
+    Args:
+        query: Search query or hashtag (e.g. 'generative AI', '#MCP', 'LLM agents 2026').
+        limit: Max results (default 10, max 50).
+    """
+    limit = min(max(1, limit), 50)
+    try:
+        api = _get_unofficial_client()
+        results = api.search_posts(keywords=query, limit=limit)
+        posts = []
+        for post in results:
+            commentary = post.get("commentary") or {}
+            text = commentary.get("text", "") if isinstance(commentary, dict) else str(commentary)
+            actor = post.get("actor", {})
+            name_obj = actor.get("name", {})
+            author = name_obj.get("text", "Unknown") if isinstance(name_obj, dict) else str(name_obj)
+            social = post.get("socialDetail", {}).get("totalSocialActivityCounts", {})
+            posts.append({
+                "author": author,
+                "text": text,
+                "likes": social.get("numLikes", 0),
+                "comments": social.get("numComments", 0),
+            })
+        return json.dumps({"query": query, "count": len(posts), "posts": posts}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def linkedin_search_companies(query: str, limit: int = 10) -> str:
+    """Search for companies on LinkedIn by name or keyword.
+
+    Returns company name, industry, size, description, and LinkedIn URL.
+    NOTE: Uses unofficial Voyager API. Requires LINKEDIN_EMAIL + LINKEDIN_PASSWORD.
+
+    Args:
+        query: Company name or keyword (e.g. 'OpenAI', 'fintech startup London').
+        limit: Max results (default 10, max 25).
+    """
+    limit = min(max(1, limit), 25)
+    try:
+        api = _get_unofficial_client()
+        results = api.search_companies(keywords=query, limit=limit)
+        companies = []
+        for c in results:
+            companies.append({
+                "name": c.get("name", ""),
+                "headline": c.get("headline", ""),
+                "subline": c.get("subline", ""),
+                "url": f"https://www.linkedin.com/company/{c.get('public_id', '')}/",
+                "public_id": c.get("public_id", ""),
+            })
+        return json.dumps({"query": query, "count": len(companies), "results": companies}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def linkedin_search_jobs(
+    keywords: str,
+    location: str = "",
+    limit: int = 10,
+    remote: bool = False,
+) -> str:
+    """Search for jobs on LinkedIn.
+
+    Returns job title, company, location, job ID, and apply URL.
+    NOTE: Uses unofficial Voyager API. Requires LINKEDIN_EMAIL + LINKEDIN_PASSWORD.
+
+    Args:
+        keywords: Job title or skills (e.g. 'ML engineer', 'product manager AI').
+        location: City or country filter (e.g. 'San Francisco', 'Remote', 'London').
+        limit: Max results (default 10, max 50).
+        remote: Filter for remote jobs only (default False).
+    """
+    limit = min(max(1, limit), 50)
+    try:
+        api = _get_unofficial_client()
+        params: dict = {"keywords": keywords, "limit": limit}
+        if location:
+            params["location_name"] = location
+        if remote:
+            params["remote"] = ["2"]  # LinkedIn's remote filter code
+        results = api.search_jobs(**params)
+        jobs = []
+        for job in results:
+            job_id = job.get("trackingUrn", "").split(":")[-1] or job.get("entityUrn", "").split(":")[-1]
+            jobs.append({
+                "title": job.get("title", ""),
+                "company": job.get("companyName", ""),
+                "location": job.get("formattedLocation", ""),
+                "listed_at": job.get("listedAt", ""),
+                "job_id": job_id,
+                "job_url": f"https://www.linkedin.com/jobs/view/{job_id}/" if job_id else "",
+                "easy_apply": job.get("applyMethod", {}).get("com.linkedin.voyager.jobs.OffsiteApply") is None,
+            })
+        return json.dumps({"keywords": keywords, "location": location, "count": len(jobs), "jobs": jobs}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def linkedin_get_job(job_id: str) -> str:
+    """Get full details of a LinkedIn job posting by job ID.
+
+    Returns full description, requirements, salary info, and Easy Apply status.
+    NOTE: Uses unofficial Voyager API. Requires LINKEDIN_EMAIL + LINKEDIN_PASSWORD.
+
+    Args:
+        job_id: Numeric LinkedIn job ID (from the URL: linkedin.com/jobs/view/JOB_ID/).
+    """
+    try:
+        api = _get_unofficial_client()
+        job = api.get_job(job_id)
+        desc = job.get("description", {})
+        desc_text = desc.get("text", "") if isinstance(desc, dict) else str(desc)
+        company = job.get("companyDetails", {})
+        company_name = (
+            company.get("com.linkedin.voyager.deco.jobs.web.shared.WebCompactJobPostingCompany", {})
+            .get("companyResolutionResult", {})
+            .get("name", "Unknown")
+        )
+        return json.dumps({
+            "job_id": job_id,
+            "title": job.get("title", ""),
+            "company": company_name,
+            "location": job.get("formattedLocation", ""),
+            "work_type": job.get("workRemoteAllowed", False),
+            "employment_type": job.get("employmentType", ""),
+            "seniority": job.get("experienceLevel", ""),
+            "description": desc_text[:3000],
+            "applies": job.get("applies", 0),
+            "views": job.get("views", 0),
+            "job_url": f"https://www.linkedin.com/jobs/view/{job_id}/",
+        }, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def linkedin_easy_apply(job_id: str, confirm: bool = False) -> str:
+    """Apply to a LinkedIn job via Easy Apply.
+
+    Only works for jobs with Easy Apply enabled (no external redirect).
+    Use linkedin_get_job(job_id) first to check the job details and confirm
+    you want to apply. Set confirm=True to actually submit.
+
+    NOTE: Uses unofficial Voyager API. Requires LINKEDIN_EMAIL + LINKEDIN_PASSWORD.
+    This is an irreversible action — it submits your saved LinkedIn profile as
+    your application. Review the job with linkedin_get_job() before applying.
+
+    Args:
+        job_id: Numeric LinkedIn job ID.
+        confirm: Must be True to actually apply (safety gate, default False).
+    """
+    if not confirm:
+        return json.dumps({
+            "status": "not_submitted",
+            "message": (
+                "Safety gate: set confirm=True to actually apply. "
+                "Use linkedin_get_job(job_id) to review the job first."
+            ),
+        })
+    try:
+        api = _get_unofficial_client()
+        api.easy_apply(job_id)
+        return json.dumps({
+            "status": "applied",
+            "job_id": job_id,
+            "job_url": f"https://www.linkedin.com/jobs/view/{job_id}/",
+            "message": "Easy Apply submitted successfully.",
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e), "note": "Job may not support Easy Apply or application already submitted."})
+
+
 if __name__ == "__main__":
     mcp.run()
